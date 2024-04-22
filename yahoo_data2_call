@@ -1,0 +1,70 @@
+import os
+import json
+from google.cloud import storage
+from google.oauth2 import service_account
+from datetime import datetime, timedelta
+import requests
+
+def get_credentials():
+    """Obtain credentials for Google Cloud services."""
+    if os.path.exists(r"C:\Users\Nuwan\Documents\INST767\google api credentials\groovy-marker-420622-e46d87cdec1f.json"):
+        return service_account.Credentials.from_service_account_file(r"C:\Users\Nuwan\Documents\INST767\google api credentials\groovy-marker-420622-e46d87cdec1f.json")
+    else:
+        return service_account.Credentials.from_service_account_file(os.environ.get(r'C:\Users\Nuwan\Documents\INST767\google api credentials\groovy-marker-420622-e46d87cdec1f.json'))
+
+def fetch_latest_data(ticker, last_update_time=None):
+    """Fetches the latest available data for a given ticker using Yahoo Finance API."""
+    url = f"https://yahoo-finance127.p.rapidapi.com/stock/v2/get-summary"
+    querystring = {"symbol": ticker, "region": "US"}
+    headers = {
+        "X-RapidAPI-Key": "0b6f0f9fc9msh49bb2b4ae21447dp151e42jsnb16a24682f14",
+        "X-RapidAPI-Host": "yahoo-finance127.p.rapidapi.com"
+    }
+    
+    response = requests.get(url, headers=headers, params=querystring)
+    if response.status_code == 200:
+        data = response.json()['price']
+        return {
+            'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'price': data.get('regularMarketPrice', {}).get('raw')
+        }
+    else:
+        print(f"Failed to fetch data for {ticker}: {response.text}")
+        return None
+
+def manage_data_storage(data, bucket_name, filename):
+    """Manages the storage of data, ensuring only the last month's data is kept."""
+    client = storage.Client(credentials=get_credentials())
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(filename)
+    last_update_time = None
+    
+    if blob.exists():
+        current_data = json.loads(blob.download_as_text())
+        last_entry = current_data[-1] if current_data else {'date': '2024-03-01 00:00:00'}
+        last_update_time = datetime.strptime(last_entry['date'], '%Y-%m-%d %H:%M:%S')
+        
+        if data:
+            current_data.append(data)
+            one_month_ago = datetime.now() - timedelta(days=30)
+            current_data = [entry for entry in current_data if datetime.strptime(entry['date'], '%Y-%m-%d %H:%M:%S') > one_month_ago]
+    else:
+        current_data = [data] if data else []
+    
+    blob.upload_from_string(json.dumps(current_data, indent=4), content_type='application/json')
+    return last_update_time
+
+def main(request):
+    tickers = ['MSFT', 'AAPL', 'NVDA']
+    bucket_name = 'yahoo'
+    for ticker in tickers:
+        filename = f'{ticker}_data.json'
+        last_update_time = manage_data_storage(None, bucket_name, filename)  # Check the last update time without updating data
+        data = fetch_latest_data(ticker, last_update_time)
+        if data:
+            manage_data_storage(data, bucket_name, filename)
+    return "Function executed successfully."
+
+# For local testing
+if __name__ == '__main__':
+    main(None)
