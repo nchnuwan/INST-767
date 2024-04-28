@@ -24,7 +24,7 @@ def fetch_latest_data(ticker, last_update_time=None):
     response = requests.get(url, headers=headers, params=querystring)
     if response.status_code == 200:
         data = response.json()
-        print("API Response Data:", data)
+        
         return {
             'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'price': data.get('regularMarketPrice', {}).get('raw')
