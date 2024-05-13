@@ -3,7 +3,8 @@ import json
 from google.cloud import storage
 from google.oauth2 import service_account
 from datetime import datetime, timedelta
-import requests
+import time
+import yfinance as yf
 
 def get_credentials():
     """Obtain credentials for Google Cloud services."""
@@ -12,60 +13,47 @@ def get_credentials():
 ) 
     return credentials
 
-def fetch_latest_data(ticker, last_update_time=None):
-    """Fetches the latest available data for a given ticker using Yahoo Finance API."""
-    url = f'https://yahoo-finance127.p.rapidapi.com/search/{ticker}'
-    querystring = {"symbol": ticker, "region": "US"}
-    headers = {
-        "X-RapidAPI-Key": '1b989a28bcmsh082508b730ca2ddp113eb5jsn0696ac57296e',
-        "X-RapidAPI-Host": 'yahoo-finance127.p.rapidapi.com'
+def fetch_stock_data(ticker):
+    """ Fetch the current stock price for the given ticker symbol. """
+    stock = yf.Ticker(ticker)
+    data = stock.history(period="1d", interval="1h")  # Get data at 1-hour intervals
+    return {
+        'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'price': data['Close'][-1]  # Get the last closing price in the interval
     }
-    
-    response = requests.get(url, headers=headers, params=querystring)
-    if response.status_code == 200:
-        data = response.json()
-        
-        return {
-            'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'price': data.get('regularMarketPrice', {}).get('raw')
-        }
-    else:
-        print(f"Failed to fetch data for {ticker}: {response.text}")
-        return None
 
-def manage_data_storage(data, bucket_name, filename):
-    """Manages the storage of data, ensuring only the last month's data is kept."""
+def save_data(data, bucket_name, filename):
+    """ Save the fetched data to Google Cloud Storage. """
     client = storage.Client(credentials=get_credentials())
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(filename)
-    last_update_time = None
-    
+
     if blob.exists():
         current_data = json.loads(blob.download_as_text())
-        last_entry = current_data[-1] if current_data else {'date': '2024-03-01 00:00:00'}
-        last_update_time = datetime.strptime(last_entry['date'], '%Y-%m-%d %H:%M:%S')
-        
-        if data:
-            current_data.append(data)
-            one_month_ago = datetime.now() - timedelta(days=30)
-            current_data = [entry for entry in current_data if datetime.strptime(entry['date'], '%Y-%m-%d %H:%M:%S') > one_month_ago]
+        current_data.append(data)
+        # Only keep data for the last month
+        one_month_ago = datetime.now() - timedelta(days=30)
+        current_data = [entry for entry in current_data if datetime.strptime(entry['date'], '%Y-%m-%d %H:%M:%S') > one_month_ago]
     else:
-        current_data = [data] if data else []
-    
+        current_data = [data]
+
     blob.upload_from_string(json.dumps(current_data, indent=4), content_type='application/json')
-    return last_update_time
 
-def main(request):
-    tickers = ['MSFT', 'AAPL', 'NVDA']
-    bucket_name = 'yahoo_data_stock'
-    for ticker in tickers:
-        filename = f'{ticker}_data.json'
-        last_update_time = manage_data_storage(None, bucket_name, filename)  # Check the last update time without updating data
-        data = fetch_latest_data(ticker, last_update_time)
-        if data:
-            manage_data_storage(data, bucket_name, filename)
-    return "Function executed successfully."
+def schedule_fetch(ticker, start_date, end_date):
+    """ Schedule data fetch from start_date to end_date at hourly intervals. """
+    current_time = datetime.now()
+    if current_time < start_date:
+        time_to_wait = (start_date - current_time).total_seconds()
+        time.sleep(time_to_wait)
+    
+    while current_time <= end_date:
+        data = fetch_stock_data(ticker)
+        save_data(data, 'yahoo_data_stock', f"{ticker}_data.json")
+        print(f"Data fetched for {ticker} at {datetime.now().isoformat()}")
+        time.sleep(3600)  # Wait for one hour
+        current_time = datetime.now()
 
-# For local testing
-if __name__ == '__main__':
-    main(None)
+if __name__ == "__main__":
+    start_date = datetime(2024, 4, 1, 0, 0)
+    end_date = datetime(2024, 6, 1, 0, 0)
+    schedule_fetch("AAPL", start_date, end_date)
